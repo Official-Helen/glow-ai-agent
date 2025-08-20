@@ -276,17 +276,20 @@ def get_config():
         pexels_api_key = st.secrets["PEXELS_API_KEY"]
         amazon_tag = st.secrets.get("AMAZON_TAG", "glowbeauty-20")
         
+        # Updated model lists with Mistral AI and reliable alternatives
         text_models = [
-            "microsoft/DialoGPT-large",
-            "facebook/blenderbot-400M-distill",
+            "mistralai/Mistral-7B-Instruct-v0.1",
+            "mistralai/Mistral-7B-v0.1",
             "microsoft/DialoGPT-medium",
-            "google/flan-t5-large"
+            "gpt2",
+            "EleutherAI/gpt-neo-1.3B"
         ]
         
         image_models = [
+            "stabilityai/stable-diffusion-2-1-base",
             "runwayml/stable-diffusion-v1-5",
-            "stabilityai/stable-diffusion-2-1",
-            "CompVis/stable-diffusion-v1-4"
+            "CompVis/stable-diffusion-v1-4",
+            "stabilityai/stable-diffusion-xl-base-1.0"
         ]
         
         return hf_api_key, pexels_api_key, amazon_tag, text_models, image_models
@@ -298,7 +301,7 @@ def get_config():
 # Initialize configuration
 HF_API_KEY, PEXELS_API_KEY, AMAZON_TAG, TEXT_MODEL_CANDIDATES, IMAGE_MODEL_CANDIDATES = get_config()
 
-# Helper functions (same as before)
+# Helper functions
 def append_affiliate_tag(url: str) -> str:
     if "amazon." not in url:
         return url
@@ -321,12 +324,16 @@ def choose_model(user_choice: Optional[str], candidates: List[str]) -> str:
 def call_hf_text(model: str, prompt: str) -> str:
     url = f"https://api-inference.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    
+    # Enhanced parameters for better text generation
     payload = {
         "inputs": prompt,
         "parameters": {
-            "max_new_tokens": 700,
+            "max_new_tokens": 800,
             "temperature": 0.7,
-            "repetition_penalty": 1.1
+            "top_p": 0.9,
+            "repetition_penalty": 1.1,
+            "do_sample": True
         },
         "options": {"wait_for_model": True}
     }
@@ -337,10 +344,30 @@ def call_hf_text(model: str, prompt: str) -> str:
             return f"❌ Error: {r.status_code} - {r.text[:200]}"
         
         data = r.json()
+        
+        # Handle different response formats
         if isinstance(data, list) and data and "generated_text" in data[0]:
-            return data[0]["generated_text"]
+            generated = data[0]["generated_text"]
+            # For Mistral models, clean up the response
+            if "[/INST]" in generated:
+                # Extract only the response part after [/INST]
+                parts = generated.split("[/INST]")
+                if len(parts) > 1:
+                    return parts[-1].strip()
+            return generated
+        
         if isinstance(data, dict) and "generated_text" in data:
-            return data["generated_text"]
+            generated = data["generated_text"]
+            if "[/INST]" in generated:
+                parts = generated.split("[/INST]")
+                if len(parts) > 1:
+                    return parts[-1].strip()
+            return generated
+            
+        # Handle error responses
+        if isinstance(data, dict) and "error" in data:
+            return f"❌ Model Error: {data['error']}"
+            
         return json.dumps(data)[:3000]
     except Exception as e:
         return f"❌ Error calling Hugging Face: {str(e)}"
@@ -352,8 +379,12 @@ def call_hf_image(model: str, prompt: str) -> Optional[str]:
     
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=180)
-        if r.status_code != 200 or "image" not in r.headers.get("content-type", "").lower():
-            st.error(f"Image generation error: {r.status_code}")
+        if r.status_code != 200:
+            st.error(f"Image generation error: {r.status_code} - {r.text[:200]}")
+            return None
+            
+        if "image" not in r.headers.get("content-type", "").lower():
+            st.error("Response is not an image")
             return None
         
         b64 = base64.b64encode(r.content).decode("utf-8")
@@ -364,7 +395,7 @@ def call_hf_image(model: str, prompt: str) -> Optional[str]:
 
 def fetch_pexels_image(query: str) -> Optional[str]:
     headers = {"Authorization": PEXELS_API_KEY}
-    url = f"https://api.pexels.com/v1/search?query={requests.utils.quote(query)}&per_page=2&orientation=landscape"
+    url = f"https://api.pexels.com/v1/search?query={requests.utils.quote(query)}&per_page=3&orientation=landscape"
     
     try:
         r = requests.get(url, headers=headers, timeout=30)
@@ -432,8 +463,8 @@ with tab1:
             model = choose_model(selected_text_model, TEXT_MODEL_CANDIDATES)
             today = datetime.utcnow().strftime("%B %d, %Y")
             
-            rules = """
-You are a professional beauty blogger writing for Blogger platform. STRICT RULES:
+            # Updated rules for Mistral format
+            rules = """You are a professional beauty blogger writing for Blogger platform. STRICT RULES:
 - Do NOT include <html>, <head>, <body>, <title>, or any <meta> tags.
 - Start with <h2> (never use <h1>).
 - Use clean HTML with <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>.
@@ -442,10 +473,19 @@ You are a professional beauty blogger writing for Blogger platform. STRICT RULES
 - Use headings hierarchy correctly.
 - Write engaging, helpful, step-by-step content.
 - Insert 1-2 Amazon product mentions naturally (just plain URLs like https://www.amazon.com/dp/B00TTD9BRC). Do NOT write affiliate tags; backend will add them.
-- Be aware of the current date and year for trend awareness but DO NOT stuff the year.
-"""
+- Be aware of the current date and year for trend awareness but DO NOT stuff the year."""
             
-            prompt = f"""{rules}
+            # Format prompt for Mistral AI
+            if "mistralai" in model.lower():
+                prompt = f"""<s>[INST] {rules}
+
+Topic: "{blog_topic}"
+Current date (UTC): {today}
+
+Write the body HTML now: [/INST]"""
+            else:
+                # Standard format for other models
+                prompt = f"""{rules}
 
 Topic: "{blog_topic}"
 Current date (UTC): {today}
@@ -492,7 +532,7 @@ with tab2:
     if generate_pin and pin_prompt:
         with st.spinner("Creating your Pinterest pin... 🎨"):
             model = choose_model(selected_image_model, IMAGE_MODEL_CANDIDATES)
-            enhanced_prompt = f"""Pinterest pin, high quality, beauty niche. Text overlay minimal. Theme: {pin_prompt}. Clean composition, aesthetic background, soft lighting."""
+            enhanced_prompt = f"""Pinterest pin, high quality, beauty niche, aesthetic, clean composition, soft lighting, professional photography style. Theme: {pin_prompt}. Vertical format, minimal text overlay, Instagram-worthy, trending beauty style."""
             
             pin_image = call_hf_image(model, enhanced_prompt)
             
@@ -510,7 +550,7 @@ with tab2:
                         st.download_button(
                             label="⬇️ Download Pin",
                             data=image_bytes,
-                            file_name=f"pinterest_pin_{pin_prompt[:20]}.png",
+                            file_name=f"pinterest_pin_{pin_prompt[:20].replace(' ', '_')}.png",
                             mime="image/png"
                         )
             else:
@@ -548,7 +588,13 @@ with tab3:
             with st.spinner("Thinking..."):
                 model = choose_model(selected_text_model, TEXT_MODEL_CANDIDATES)
                 
-                beauty_prompt = f"""You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly and informative.
+                # Format prompt based on model type
+                if "mistralai" in model.lower():
+                    beauty_prompt = f"""<s>[INST] You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly, informative, and concise. Give practical tips and recommendations.
+
+Question: {prompt} [/INST]"""
+                else:
+                    beauty_prompt = f"""You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly and informative.
 
 Question: {prompt}
 
@@ -576,9 +622,10 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 💡 Features:")
+    st.markdown("• **Mistral AI**: Advanced language models")
     st.markdown("• **Blog Generator**: SEO-optimized posts")
     st.markdown("• **Pinterest Pins**: Beauty content ready")
-    st.markdown("• **Chat Mode**: Beauty advice & tips")
+    st.markdown("• **Chat Mode**: Expert beauty advice")
     st.markdown("• **Auto Amazon Tags**: Monetize content!")
     
     st.markdown("---")
