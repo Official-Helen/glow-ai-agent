@@ -1,6 +1,6 @@
-streamlit>=1.25.0
-requests>=2.31.0
-pytrends>=4.10.0
-pillow>=10.0.0
+streamlit
+requests
+pytrends
+pillow
 base64
 typing-extensions
