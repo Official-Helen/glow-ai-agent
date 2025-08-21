@@ -467,8 +467,8 @@ with tab1:
 - Insert 1-2 Amazon product mentions naturally (just plain URLs like https://www.amazon.com/dp/B00TTD9BRC). Do NOT write affiliate tags; backend will add them.
 - Be aware of the current date and year for trend awareness but DO NOT stuff the year."""
             
-                # Standard format for all models (no special Mistral formatting)
-                prompt = f"""{rules}
+            # Standard format for all models (no special Mistral formatting)
+            prompt = f"""{rules}
 
 Topic: "{blog_topic}"
 Current date (UTC): {today}
