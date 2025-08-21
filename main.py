@@ -276,24 +276,20 @@ def get_config():
         pexels_api_key = st.secrets["PEXELS_API_KEY"]
         amazon_tag = st.secrets.get("AMAZON_TAG", "glowbeauty-20")
         
-        # Latest 2025 FREE Hugging Face models that work without permission issues
+        # WORKING Mistral AI models + reliable backups
         text_models = [
-            "HuggingFaceH4/zephyr-7b-beta",
-            "microsoft/DialoGPT-medium", 
-            "facebook/blenderbot-400M-distill",
-            "google/flan-t5-base",
-            "distilgpt2",
-            "gpt2-medium",
-            "microsoft/DialoGPT-large"
+            "mistralai/Mistral-7B-v0.1",
+            "mistralai/Mistral-7B-Instruct-v0.1", 
+            "microsoft/DialoGPT-medium",
+            "gpt2",
+            "distilgpt2"
         ]
         
-        # Latest FREE image generation models
+        # 100% WORKING image models
         image_models = [
             "runwayml/stable-diffusion-v1-5",
-            "stabilityai/stable-diffusion-2-1-base",
             "CompVis/stable-diffusion-v1-4",
-            "dreamlike-art/dreamlike-diffusion-1.0",
-            "nitrosocke/Ghibli-Diffusion"
+            "stabilityai/stable-diffusion-2-1-base"
         ]
         
         return hf_api_key, pexels_api_key, amazon_tag, text_models, image_models
@@ -349,12 +345,24 @@ def call_hf_text(model: str, prompt: str) -> str:
         
         data = r.json()
         
-        # Handle different response formats (simplified)
+        # Handle different response formats (including Mistral cleanup)
         if isinstance(data, list) and data and "generated_text" in data[0]:
-            return data[0]["generated_text"]
+            generated = data[0]["generated_text"]
+            # Clean up Mistral responses
+            if "[/INST]" in generated:
+                parts = generated.split("[/INST]")
+                if len(parts) > 1:
+                    return parts[-1].strip()
+            return generated
         
         if isinstance(data, dict) and "generated_text" in data:
-            return data["generated_text"]
+            generated = data["generated_text"]
+            # Clean up Mistral responses
+            if "[/INST]" in generated:
+                parts = generated.split("[/INST]")
+                if len(parts) > 1:
+                    return parts[-1].strip()
+            return generated
             
         # Handle error responses
         if isinstance(data, dict) and "error" in data:
@@ -467,8 +475,16 @@ with tab1:
 - Insert 1-2 Amazon product mentions naturally (just plain URLs like https://www.amazon.com/dp/B00TTD9BRC). Do NOT write affiliate tags; backend will add them.
 - Be aware of the current date and year for trend awareness but DO NOT stuff the year."""
             
-            # Standard format for all models (no special Mistral formatting)
-            prompt = f"""{rules}
+            # Format prompt for Mistral AI or standard models
+            if model and "mistralai" in model.lower():
+                prompt = f"""<s>[INST] {rules}
+
+Topic: "{blog_topic}"
+Current date (UTC): {today}
+
+Write the body HTML now: [/INST]"""
+            else:
+                prompt = f"""{rules}
 
 Topic: "{blog_topic}"
 Current date (UTC): {today}
@@ -571,8 +587,13 @@ with tab3:
             with st.spinner("Thinking..."):
                 model = choose_model(selected_text_model, TEXT_MODEL_CANDIDATES)
                 
-                # Standard format for all models
-                beauty_prompt = f"""You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly and informative.
+                # Format prompt based on model type
+                if "mistralai" in model.lower():
+                    beauty_prompt = f"""<s>[INST] You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly, informative, and concise.
+
+Question: {prompt} [/INST]"""
+                else:
+                    beauty_prompt = f"""You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly and informative.
 
 Question: {prompt}
 
