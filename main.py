@@ -1,126 +1,102 @@
-import streamlit as st
-import requests
+# ================================
+# Glow AI – Blogger Auto Publisher
+# ================================
+# Features:
+# - Google Trends (beauty/skincare/fashion-filtered) + Pinterest-like trends (robust fallback)
+# - Groq-written, human & SEO-optimized HTML (starts at <h2>, no <meta> in body)
+# - Section-matched Pexels images with photographer credit
+# - Amazon affiliate links inserted with your tag
+# - Auto labels: SEO keyword + trends
+# - Title <= 60 chars, searchDescription 150–160 chars
+# - Auto-publish to Blogger via OAuth (refresh token)
+# - Chat-style history (load/delete)
+
+import re
 import json
-import datetime
+import time
+import html
+import random
+import requests
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional
 
-# ----------------------------
-# Secrets (Set these in Streamlit Secrets)
-# ----------------------------
-PEXELS_API_KEY = st.secrets["PEXELS_API_KEY"]
+import streamlit as st
+
+# ---------- Config ----------
+st.set_page_config(page_title="Glow AI – Blogger Auto Publisher", layout="wide")
+
+# ---------- Secrets / Keys ----------
+REQ_KEYS = [
+    "BLOGGER_BLOG_ID", "BLOGGER_CLIENT_ID", "BLOGGER_CLIENT_SECRET", "BLOGGER_REFRESH_TOKEN",
+    "GROQ_API_KEY", "PEXELS_API_KEY", "AMAZON_TAG"
+]
+missing = [k for k in REQ_KEYS if k not in st.secrets]
+if missing:
+    st.error(f"Missing required secrets: {', '.join(missing)}")
+    st.stop()
+
+BLOGGER_BLOG_ID = st.secrets["BLOGGER_BLOG_ID"]
+GOOGLE_CLIENT_ID = st.secrets["BLOGGER_CLIENT_ID"]
+GOOGLE_CLIENT_SECRET = st.secrets["BLOGGER_CLIENT_SECRET"]
+GOOGLE_REFRESH_TOKEN = st.secrets["BLOGGER_REFRESH_TOKEN"]
+
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-BLOGGER_BLOG_ID = st.secrets.get("BLOGGER_BLOG_ID", "")
-BLOGGER_CLIENT_ID = st.secrets.get("BLOGGER_CLIENT_ID", "")
-BLOGGER_CLIENT_SECRET = st.secrets.get("BLOGGER_CLIENT_SECRET", "")
-BLOGGER_ACCESS_TOKEN = st.secrets.get("BLOGGER_ACCESS_TOKEN", "")
+PEXELS_API_KEY = st.secrets["PEXELS_API_KEY"]
+AMAZON_TAG = st.secrets["AMAZON_TAG"]
 
-# ----------------------------
-# Initialize session state for chat history
-# ----------------------------
-if "blog_history" not in st.session_state:
-    st.session_state.blog_history = []
+# ---------- Libs that may be optional ----------
+# pytrends is optional; app will gracefully fallback if not installed
+try:
+    from pytrends.request import TrendReq
+    _pytrends_available = True
+except Exception:
+    _pytrends_available = False
 
-# ----------------------------
-# Groq API - Text Generation
-# ----------------------------
-def generate_blog_content(topic, length=500):
-    url = "https://api.groq.com/v1/generate"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    prompt = f"Write a detailed, SEO-optimized blog post about '{topic}' in HTML format. Start with H2 headings, include H3 subheadings, and make it informative and long. Do not include raw affiliate links, instead write like 'Get this product: [link]'."
-    payload = {"prompt": prompt, "max_output_tokens": length}
+# ---------- Session State ----------
+if "history" not in st.session_state:
+    st.session_state.history: List[Dict] = []  # [{id, title, topic, html, labels, search_desc, created_at}]
+if "current_id" not in st.session_state:
+    st.session_state.current_id: Optional[str] = None
 
-    response = requests.post(url, headers=headers, json=payload)
-    try:
-        data = response.json()
-        return data.get("output_text", "<p>No content generated</p>")
-    except ValueError:
-        st.error(f"Groq API returned invalid JSON: {response.text}")
-        return "<p>Error generating content</p>"
+# ---------- Utilities ----------
+def trim_title(s: str, max_len: int = 60) -> str:
+    s = re.sub(r"\s+", " ", s).strip()
+    return s if len(s) <= max_len else s[:max_len-1].rstrip() + "…"
 
-# ----------------------------
-# Pexels API - Image Generation
-# ----------------------------
-def generate_image(topic):
-    url = "https://api.pexels.com/v1/search"
-    headers = {"Authorization": PEXELS_API_KEY}
-    params = {"query": topic, "per_page": 1}
+def clamp_description(s: str, lo: int = 150, hi: int = 160) -> str:
+    s = re.sub(r"\s+", " ", s).strip()
+    if len(s) > hi:
+        return s[:hi-1].rstrip() + "…"
+    if len(s) < lo:
+        # pad gently (rare)
+        return s + " " + ("." * max(0, lo - len(s)))
+    return s
 
-    response = requests.get(url, headers=headers, params=params)
-    try:
-        data = response.json()
-    except ValueError:
-        st.error(f"Pexels API returned invalid JSON: {response.text}")
-        return "https://via.placeholder.com/800x400?text=Blog+Image"
+def append_amazon_tag(url: str, tag: str) -> str:
+    if "amazon." not in url and "amzn.to" not in url:
+        return url
+    if "tag=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}tag={tag}"
 
-    if "photos" in data and len(data["photos"]) > 0:
-        return data["photos"][0]["src"]["original"]
-    return "https://via.placeholder.com/800x400?text=Blog+Image"
-
-# ----------------------------
-# Generate HTML Blog
-# ----------------------------
-def generate_blog_html(topic, seo_description=""):
-    content = generate_blog_content(topic)
-    image_url = generate_image(topic)
-
-    html = f"""
-    <!-- SEO Meta Description -->
-    <meta name="description" content="{seo_description}">
-
-    <!-- Blog Title -->
-    <h2>{topic}</h2>
-
-    <!-- Blog Image -->
-    <img src="{image_url}" alt="{topic}" style="max-width:100%; height:auto;">
-
-    <!-- Blog Content -->
-    {content}
-    """
-    return html, image_url, content
-
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-st.set_page_config(page_title="Glow AI Blog Generator", layout="wide")
-st.title("✨ Glow AI Blog Generator")
-
-# Sidebar - History
-with st.sidebar:
-    st.header("Blog History")
-    for idx, item in enumerate(st.session_state.blog_history[::-1]):
-        if st.button(f"{item['topic']} ({item['date']})", key=f"hist{idx}"):
-            st.session_state.selected_blog = item
-
-    if st.button("Clear History"):
-        st.session_state.blog_history = []
-        st.experimental_rerun()
-
-# Main input
-topic_input = st.text_input("Enter blog topic or click auto-trending:")
-seo_desc_input = st.text_input("Enter SEO meta description (optional):")
-
-# Generate blog button
-if st.button("Generate Blog"):
-    if not topic_input:
-        st.warning("Please enter a blog topic.")
-    else:
-        html_content, image_url, content = generate_blog_html(topic_input, seo_desc_input)
-        st.code(html_content, language="html")
-        st.image(image_url, caption="Generated Blog Image", use_column_width=True)
-
-        # Save to history
-        st.session_state.blog_history.append({
-            "topic": topic_input,
-            "html": html_content,
-            "image_url": image_url,
-            "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-
-# Selected blog from history
-if "selected_blog" in st.session_state:
-    blog = st.session_state.selected_blog
-    st.subheader(f"History: {blog['topic']}")
-    st.code(blog["html"], language="html")
-    st.image(blog["image_url"], use_column_width=True)
+# Map common beauty keywords to real Amazon products (fill with your *real* links).
+# You can add/modify anytime—no code changes needed.
+AMAZON_PRODUCTS: Dict[str, List[str]] = {
+    # cleansers
+    "cleanser": [
+        f"https://www.amazon.com/dp/B07Z5BZCHB?tag={AMAZON_TAG}",  # CeraVe Hydrating Facial Cleanser
+        f"https://www.amazon.com/dp/B01N6E66RN?tag={AMAZON_TAG}",  # Cetaphil Gentle Skin Cleanser
+    ],
+    # exfoliant / bha / aha
+    "bha": [
+        f"https://www.amazon.com/dp/B00949CTQQ?tag={AMAZON_TAG}",  # Paula’s Choice 2% BHA
+    ],
+    "exfoliant": [
+        f"https://www.amazon.com/dp/B00949CTQQ?tag={AMAZON_TAG}",
+    ],
+    # niacinamide
+    "niacinamide": [
+        f"https://www.amazon.com/dp/B09NQ5L9V5?tag={AMAZON_TAG}",  # The Ordinary Niacinamide
+    ],
+    #
