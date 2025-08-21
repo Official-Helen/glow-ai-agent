@@ -1,6 +1,8 @@
 streamlit
 requests
 pytrends
+pandas
+lxml
 pillow
-base64
+beautifulsoup4
 typing-extensions
