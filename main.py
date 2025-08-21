@@ -1,122 +1,124 @@
+# main.py
+
 import streamlit as st
 from datetime import datetime
+import json
+from typing import List, Dict
 import requests
+from pytrends.request import TrendReq
 
-# -----------------------------
-# TRENDING TOPICS FUNCTION
-# -----------------------------
-def get_trending_topics(category="beauty"):
-    """
-    Fetch trending topics using pytrends or fallback to predefined list.
-    Only include topics related to the given category.
-    """
-    try:
-        from pytrends.request import TrendReq
-        pytrends = TrendReq(hl='en-US', tz=360)
-        trending_searches = pytrends.trending_searches(pn='united_states')
-        # Filter based on category keywords
-        filtered = [t for t in trending_searches[0] if category.lower() in t.lower()]
-        return filtered[:5] if filtered else trending_searches[0][:5]
-    except Exception as e:
-        print(f"⚠️ Pytrends error: {e}")
-        # fallback static topics
-        fallback_topics = {
-            "beauty": ["Best Skincare Routine 2025", "Top Makeup Trends", "Vegan Beauty Products", "Anti-aging Skincare", "Hydrating Masks"],
-            "skincare": ["Glowing Skin Tips", "Acne Treatment Products", "Niacinamide Benefits", "Best Serums 2025", "Hydrating Moisturizers"],
-            "fashion": ["Street Style Trends", "Summer Dresses 2025", "Sustainable Fashion", "Statement Accessories", "Workwear Fashion"]
-        }
-        return fallback_topics.get(category.lower(), ["Trending Topic 1", "Trending Topic 2"])
+# --- CONFIGURATION ---
+PIXEL_API_KEY = "AaH9XXg6G9njbOo7Y28TsSSS9ofZ304nZS0q8ZBEWhS5vkNPKyH4Srea"  # Replace with your Pixel API key
 
-# -----------------------------
-# PIXEL API IMAGE GENERATION
-# -----------------------------
-def generate_blog_image(prompt, pixel_api_key):
-    url = "https://api.pixel.com/v1/generate"
-    headers = {"Authorization": f"Bearer {pixel_api_key}"}
-    payload = {"prompt": prompt, "size": "1024x1024"}
-    
-    response = requests.post(url, json=payload, headers=headers)
+# Blogger OAuth credentials
+BLOGGER_CLIENT_ID = "YOUR_CLIENT_ID"
+BLOGGER_CLIENT_SECRET = "YOUR_CLIENT_SECRET"
+BLOGGER_REDIRECT_URI = "https://glowwithhelen.blogspot.com/"  # or your Streamlit URL for OAuth redirect
+
+# --- INITIALIZE SESSION STATE ---
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "current_chat" not in st.session_state:
+    st.session_state.current_chat = {"title": "", "seo_desc": "", "content": "", "featured_image": ""}
+
+# --- UTILITIES ---
+
+def get_trending_topics(category: str = "beauty") -> List[str]:
+    pytrends = TrendReq()
+    trending_searches = pytrends.trending_searches(pn="united_states")
+    trending_list = trending_searches[0].tolist()
+    # Filter by category keywords
+    filtered = [topic for topic in trending_list if category.lower() in topic.lower()]
+    return filtered[:10] if filtered else trending_list[:10]
+
+def generate_pixel_image(prompt: str) -> str:
+    """
+    Generate image URL using Pixel API based on prompt.
+    Returns direct URL for embedding in HTML.
+    """
+    headers = {"Authorization": f"Bearer {PIXEL_API_KEY}"}
+    data = {"prompt": prompt, "size": "1024x1024"}
+    response = requests.post("https://api.pixel.com/v1/generate", headers=headers, json=data)
     if response.status_code == 200:
-        data = response.json()
-        # return URL of generated image
-        return data.get("image_url")
+        return response.json().get("url")
+    return ""
+
+def generate_blog_html(title: str, seo_desc: str, topic: str) -> Dict[str, str]:
+    """
+    Generate HTML blog post with H2 headings and Pixel image.
+    """
+    # For simplicity, placeholder content; replace with Groq API call if needed
+    content = f"""
+    <h2>{topic}</h2>
+    <p>This is a detailed blog post about {topic}, optimized for SEO and user engagement. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+    """
+    # Generate Pixel image
+    image_url = generate_pixel_image(f"{topic} beauty fashion skincare")
+    if image_url:
+        content = f'<img src="{image_url}" alt="{topic}" style="width:100%;max-width:800px;">' + content
+
+    html_post = f"""
+    <h2>{topic}</h2>
+    <p>{seo_desc}</p>
+    {content}
+    """
+    return {"title": title, "seo_desc": seo_desc, "content": html_post, "featured_image": image_url}
+
+def publish_to_blogger(blog_post: Dict[str, str]):
+    """
+    Publish blog post to Blogger using OAuth credentials.
+    """
+    access_token = st.session_state.get("blogger_token")
+    if not access_token:
+        st.warning("Blogger OAuth token missing. Authenticate first.")
+        return
+    url = f"https://www.googleapis.com/blogger/v3/blogs/YOUR_BLOG_ID/posts/"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {
+        "kind": "blogger#post",
+        "title": blog_post["title"],
+        "content": blog_post["content"]
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        st.success("Blog post published successfully!")
     else:
-        print("⚠️ Pixel API error:", response.text)
-        return None
+        st.error(f"Error publishing post: {response.text}")
 
-# -----------------------------
-# BLOG POST GENERATOR
-# -----------------------------
-def generate_blog_post_html(title, content, image_url, affiliate_links=None):
-    """
-    Returns HTML formatted blog post for Blogger.
-    """
-    # HTML formatting
-    html = f"""<h2>{title}</h2>
-<img src="{image_url}" alt="{title}" style="max-width:100%; height:auto;" />
-<div>{content}</div>
-"""
-    # Add affiliate links if provided
-    if affiliate_links:
-        html += "<ul>"
-        for product_name, link in affiliate_links.items():
-            html += f'<li>Get this product: <a href="{link}" target="_blank">{product_name}</a></li>'
-        html += "</ul>"
-    return html
+# --- STREAMLIT UI ---
+st.set_page_config(page_title="Glow AI Blog Generator", layout="wide")
 
-# -----------------------------
-# STREAMLIT APP
-# -----------------------------
-st.title("Glow AI Agent - Auto Blog Generator")
+st.title("✨ Glow AI Blog Generator")
 
-pixel_api_key = st.text_input("Enter your Pixel API Key:", type="password")
+# Sidebar - Chat History
+with st.sidebar:
+    st.header("Chat History")
+    if st.session_state.history:
+        for idx, chat in enumerate(st.session_state.history):
+            if st.button(f"{chat['title']}", key=f"hist_{idx}"):
+                st.session_state.current_chat = chat
+    if st.button("Clear History"):
+        st.session_state.history = []
 
-category = st.selectbox("Select category:", ["beauty", "skincare", "fashion"])
-
-st.header("Trending Topics")
-topics = get_trending_topics(category)
-st.write(topics)
-
-selected_topic = st.selectbox("Select topic to generate blog:", topics)
-
-# Optional user input to customize content
-user_prompt = st.text_area("Additional instructions for AI content:")
+# Main input
+topic_input = st.text_input("Enter topic (or leave empty for trending topics):")
+category = st.selectbox("Category for trending topics:", ["Beauty", "Skincare", "Fashion"])
 
 if st.button("Generate Blog Post"):
-    # 1. Generate image via Pixel
-    image_url = generate_blog_image(selected_topic, pixel_api_key)
-    if not image_url:
-        st.warning("Image generation failed. Using placeholder.")
-        image_url = "https://via.placeholder.com/1024x512.png?text=Blog+Image"
+    # Determine topic
+    if not topic_input:
+        trending = get_trending_topics(category=category)
+        topic_input = trending[0]  # pick first trending
+    title = f"{topic_input} - Glow With Helen"
+    seo_desc = f"Learn everything about {topic_input} in beauty, skincare, and fashion."
+    blog_post = generate_blog_html(title, seo_desc, topic_input)
+    st.session_state.current_chat = blog_post
+    st.session_state.history.append(blog_post)
 
-    # 2. Generate blog content using Groq API
-    import requests
-
-    groq_api_key = st.text_input("Enter your Groq API Key:", type="password")
-    groq_endpoint = "https://api.groq.ai/v1/generate"
-
-    prompt_text = f"Write a detailed, SEO-optimized blog post in HTML about '{selected_topic}'. {user_prompt or ''}"
-    headers = {"Authorization": f"Bearer {groq_api_key}"}
-    payload = {"prompt": prompt_text, "max_tokens": 1500, "temperature": 0.7}
-
-    response = requests.post(groq_endpoint, json=payload, headers=headers)
-    if response.status_code == 200:
-        blog_content = response.json().get("text", "Content generation failed.")
-    else:
-        blog_content = f"Error generating content: {response.text}"
-
-    # 3. Example affiliate links dictionary
-    affiliate_links = {
-        "The Ordinary Niacinamide 10% + Zinc 1%": "https://amzn.to/4eXaTxE",
-        "Paula’s Choice 2% BHA Exfoliant": "https://www.amazon.com/dp/B00949CTQQ/?tag=helenbeautysh-20"
-    }
-
-    # 4. Generate final HTML
-    blog_html = generate_blog_post_html(selected_topic, blog_content, image_url, affiliate_links)
-
-    st.subheader("Generated Blog Post (HTML)")
-    st.code(blog_html, language="html")
-
-    # 5. Optional: auto-publish to Blogger (requires OAuth flow)
+# Display generated post
+if st.session_state.current_chat.get("content"):
+    st.subheader("Generated Blog Post (HTML Format)")
+    st.code(st.session_state.current_chat["content"], language="html")
     if st.button("Publish to Blogger"):
-        st.info("Publishing functionality requires OAuth integration. Implement Blogger API here.")
+        publish_to_blogger(st.session_state.current_chat)
