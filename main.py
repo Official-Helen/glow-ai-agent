@@ -1,127 +1,152 @@
+import streamlit as st
 import requests
 import json
+import random
 import re
-from typing import Dict, List
 from datetime import datetime
+from typing import Dict, List
 
-# -------------------------------
-# CONFIGURATION
-# -------------------------------
+# ======================
+# CONFIG
+# ======================
 AMAZON_TAG = "helenbeautysh-20"
 
-# ✅ Affiliate Product Mapping (Fixed dictionary)
+BLOGGER_API_KEY = "YOUR_BLOGGER_API_KEY"
+BLOG_ID = "YOUR_BLOG_ID"
+
+# ======================
+# SAMPLE AMAZON PRODUCTS
+# ======================
 AMAZON_PRODUCTS: Dict[str, List[str]] = {
     "skincare": [
-        f"https://www.amazon.com/dp/B00949CTQQ/?tag={AMAZON_TAG}",  # Paula’s Choice 2% BHA Exfoliant
-        f"https://amzn.to/4eXaTxE",  # The Ordinary Niacinamide
-        f"https://www.amazon.com/dp/B0D663VWFC/?tag={AMAZON_TAG}",  # COSRX Snail Mucin Essence
-        f"https://www.amazon.com/dp/B0F6D35G3G/?tag={AMAZON_TAG}",  # La Roche-Posay Moisturizer
-    ],
-    "sunscreen": [
-        f"https://amzn.to/4kQjLqe",  # EltaMD UV Clear
-        f"https://amzn.to/4flUkvp",  # La Roche-Posay Anthelios
-        f"https://amzn.to/40RfWtM",  # Black Girl Sunscreen
+        f"https://www.amazon.com/dp/B00949CTQQ?tag={AMAZON_TAG}",  # Paula’s Choice BHA
+        f"https://www.amazon.com/dp/B0D663VWFC?tag={AMAZON_TAG}",  # COSRX Snail Mucin
+        f"https://www.amazon.com/dp/B0F6D35G3G?tag={AMAZON_TAG}",  # La Roche-Posay Moisturizer
     ],
     "makeup": [
-        f"https://www.amazon.com/dp/B07HR8JS2Q/?tag={AMAZON_TAG}",  # Maybelline Foundation
-        f"https://www.amazon.com/dp/B01J24K8MK/?tag={AMAZON_TAG}",  # L’Oreal Mascara
+        f"https://www.amazon.com/dp/B07FNWB5LR?tag={AMAZON_TAG}",  # Maybelline Fit Me Foundation
+        f"https://www.amazon.com/dp/B08R9V5ZKJ?tag={AMAZON_TAG}",  # NYX Lip Gloss
     ],
-}  # ✅ Now properly closed
+}
 
-BLOG_ID = "YOUR_BLOGGER_BLOG_ID"
-ACCESS_TOKEN = "YOUR_GOOGLE_OAUTH_ACCESS_TOKEN"
+# ======================
+# HELPER FUNCTIONS
+# ======================
 
-# -------------------------------
-# TREND SCRAPER PLACEHOLDERS
-# -------------------------------
-def fetch_google_trends(keyword: str) -> List[str]:
-    # Placeholder: Replace with pytrends or API
-    return [f"{keyword} skincare", f"best {keyword} routine", f"{keyword} tips"]
+def fetch_google_trends():
+    try:
+        url = "https://trends.google.com/trending/rss?geo=US"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        items = re.findall(r"<title>(.*?)</title>", resp.text)
+        return [i for i in items if i.lower() != "top stories"]
+    except Exception as e:
+        return [f"⚠️ Google Trends fetch failed: {e}"]
 
-def fetch_pinterest_trends(keyword: str) -> List[str]:
-    # Placeholder: Replace with Pinterest API or scraping
-    return [f"{keyword} ideas", f"{keyword} hacks", f"{keyword} products"]
+def fetch_pinterest_trends():
+    try:
+        url = "https://www.pinterest.com/trending/"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        items = re.findall(r"\"name\":\"(.*?)\"", resp.text)
+        return list(set(items[:10]))
+    except Exception as e:
+        return [f"⚠️ Pinterest Trends fetch failed: {e}"]
 
-# -------------------------------
-# BLOG POST GENERATOR
-# -------------------------------
-def generate_blog_post(keyword: str, category: str) -> Dict[str, str]:
-    # Fetch trends
-    google_trends = fetch_google_trends(keyword)
-    pinterest_trends = fetch_pinterest_trends(keyword)
-    combined_keywords = google_trends + pinterest_trends
+def generate_seo_title(base: str) -> str:
+    words = base.split()
+    return " ".join(words[:8])  # keep title short (max ~60 chars)
 
-    # Pick some labels
-    labels = list(set([kw.split()[0].capitalize() for kw in combined_keywords[:5]]))
+def generate_meta_description(content: str) -> str:
+    clean = re.sub(r"<.*?>", "", content)
+    return clean[:155]
 
-    # Title (SEO short and clear)
-    title = f"{keyword.capitalize()} Skincare Tips in 2025"
+def generate_labels(keywords: List[str]) -> List[str]:
+    return keywords[:5]
 
-    # Meta description (not stuffed, natural)
-    meta_description = (
-        f"Discover {keyword} skincare trends for 2025. "
-        "Learn easy routines, dermatologist-approved tips, and products people love."
-    )
+def generate_blog_post(topic: str, trend_keywords: List[str], niche: str):
+    # Pick Amazon products for this niche
+    products = AMAZON_PRODUCTS.get(niche, [])
+    product_links = "".join([f'<li><a href="{p}" target="_blank">Buy on Amazon</a></li>' for p in products])
 
-    # Body (humanized, not just sales)
-    body = f"""
-<p><strong>{keyword.capitalize()} skincare</strong> has become one of the most searched beauty topics in 2025. 
-People are not just looking for products—they want routines that feel natural, safe, and effective.</p>
+    # Content
+    content = f"""
+    <h2>{topic}</h2>
+    <p>{topic} is trending right now! Let’s explore why it matters in beauty & skincare.</p>
 
-<p>Based on <em>Google Trends</em> and <em>Pinterest insights</em>, here are some things people are searching for:</p>
-<ul>
-    {''.join([f"<li>{kw}</li>" for kw in combined_keywords[:6]])}
-</ul>
+    <p>Here are some powerful insights:</p>
+    <ul>
+        {"".join([f"<li>{kw}</li>" for kw in trend_keywords[:5]])}
+    </ul>
 
-<p>Here are some trusted products that can help improve your {keyword} routine:</p>
-<ul>
-    {''.join([f'<li><a href="{link}" target="_blank" rel="nofollow">Check on Amazon</a></li>' for link in AMAZON_PRODUCTS.get(category, [])])}
-</ul>
+    <p>Recommended products you’ll love:</p>
+    <ul>{product_links}</ul>
 
-<p>Remember, skincare is not about buying everything—it’s about finding what works for your skin and sticking to a consistent routine.</p>
+    <p>Remember, beauty is about confidence and care. Use these tips to glow daily ✨</p>
     """
 
-    return {
-        "title": title,
-        "body": body,
-        "meta_description": meta_description,
-        "labels": labels,
-    }
+    return content
 
-# -------------------------------
-# BLOGGER PUBLISHER
-# -------------------------------
-def publish_to_blogger(post: Dict[str, str]):
-    url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOG_ID}/posts/"
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+def publish_to_blogger(title: str, content: str, labels: List[str]):
+    try:
+        url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOG_ID}/posts/?key={BLOGGER_API_KEY}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "kind": "blogger#post",
+            "blog": {"id": BLOG_ID},
+            "title": title,
+            "labels": labels,
+            "content": content,
+        }
+        resp = requests.post(url, headers=headers, data=json.dumps(payload))
+        if resp.status_code == 200:
+            return "✅ Post published successfully!"
+        else:
+            return f"⚠️ Blogger publish failed: {resp.text}"
+    except Exception as e:
+        return f"⚠️ Blogger publish error: {e}"
 
-    data = {
-        "kind": "blogger#post",
-        "blog": {"id": BLOG_ID},
-        "title": post["title"],
-        "content": f"""
-<!-- Meta Description -->
-<meta name="description" content="{post['meta_description']}">
+# ======================
+# STREAMLIT UI
+# ======================
+st.set_page_config(page_title="✨ Glow AI Agent", page_icon="✨", layout="wide")
 
-{post['body']}
-        """,
-        "labels": post["labels"],
-    }
+st.title("✨ Glow AI Agent - Blogger Auto Publisher")
+st.write("Generate SEO blog posts with Google + Pinterest trends, Amazon products, and auto-publish to Blogger.")
 
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    if response.status_code == 200:
-        print("✅ Blog post published successfully!")
-        return response.json()
-    else:
-        print("❌ Failed to publish:", response.text)
-        return None
+# Sidebar
+st.sidebar.header("🔧 Settings")
+niche = st.sidebar.selectbox("Choose niche:", list(AMAZON_PRODUCTS.keys()))
 
-# -------------------------------
-# MAIN EXECUTION
-# -------------------------------
-if __name__ == "__main__":
-    keyword = "hydration"
-    category = "skincare"
+# Fetch trends
+google_trends = fetch_google_trends()
+pinterest_trends = fetch_pinterest_trends()
 
-    post = generate_blog_post(keyword, category)
-    publish_to_blogger(post)
+st.subheader("🔥 Latest Trends")
+col1, col2 = st.columns(2)
+with col1:
+    st.write("**Google Trends:**")
+    st.write(google_trends)
+with col2:
+    st.write("**Pinterest Trends:**")
+    st.write(pinterest_trends)
+
+# Post generation
+st.subheader("✍️ Generate Blog Post")
+topic = st.text_input("Enter a topic (or pick from trends):", random.choice(google_trends))
+if st.button("Generate Post"):
+    trend_keywords = google_trends[:3] + pinterest_trends[:3]
+    content = generate_blog_post(topic, trend_keywords, niche)
+    seo_title = generate_seo_title(topic)
+    meta_desc = generate_meta_description(content)
+    labels = generate_labels(trend_keywords)
+
+    st.write("### Preview")
+    st.markdown(f"**SEO Title:** {seo_title}")
+    st.markdown(f"**Meta Description:** {meta_desc}")
+    st.markdown(f"**Labels:** {', '.join(labels)}")
+    st.markdown(content, unsafe_allow_html=True)
+
+    if st.button("🚀 Publish to Blogger"):
+        result = publish_to_blogger(seo_title, content, labels)
+        st.success(result)
