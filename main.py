@@ -272,34 +272,43 @@ st.markdown("""
 @st.cache_data
 def get_config():
     try:
-        hf_api_key = st.secrets["HUGGINGFACE_API_KEY"]
-        pexels_api_key = st.secrets["PEXELS_API_KEY"]
-        amazon_tag = st.secrets.get("AMAZON_TAG", "glowbeauty-20")
+        # Get API keys (Groq for text, HF for images, with Replicate as premium upgrade)
+        try:
+            groq_api_key = st.secrets.get("GROQ_API_KEY", "")
+            hf_api_key = st.secrets.get("HUGGINGFACE_API_KEY", "")
+            replicate_token = st.secrets.get("REPLICATE_API_TOKEN", "")
+            pexels_api_key = st.secrets["PEXELS_API_KEY"]
+            amazon_tag = st.secrets.get("AMAZON_TAG", "glowbeauty-20")
+        except:
+            st.error("Please add your API keys to Streamlit secrets!")
+            st.stop()
         
-        # WORKING Mistral AI models + reliable backups
+        # Text models - prioritize Groq for better quality
         text_models = [
-            "mistralai/Mistral-7B-v0.1",
-            "mistralai/Mistral-7B-Instruct-v0.1", 
-            "microsoft/DialoGPT-medium",
-            "gpt2",
-            "distilgpt2"
+            "groq/llama-3.1-70b-versatile",  # Groq - BEST quality
+            "groq/llama-3.1-8b-instant",    # Groq - Fast
+            "groq/mixtral-8x7b-32768",      # Groq - Good for long content
+            "gpt2-medium",                   # HF fallback
+            "microsoft/DialoGPT-medium"      # HF fallback
         ]
         
-        # 100% WORKING image models
+        # Image models - Free HF models with premium Replicate option
         image_models = [
-            "runwayml/stable-diffusion-v1-5",
-            "CompVis/stable-diffusion-v1-4",
-            "stabilityai/stable-diffusion-2-1-base"
+            "replicate/ideogram-v2",         # Premium - best quality (when you upgrade)
+            "black-forest-labs/FLUX.1-schnell",  # Free - good quality
+            "stabilityai/sdxl-turbo",       # Free - fast
+            "runwayml/stable-diffusion-v1-5", # Free - reliable
+            "segmind/SSD-1B"                # Free - lightweight
         ]
         
-        return hf_api_key, pexels_api_key, amazon_tag, text_models, image_models
+        return groq_api_key, hf_api_key, replicate_token, pexels_api_key, amazon_tag, text_models, image_models
     except Exception as e:
         st.error(f"⚠️ Configuration error: {str(e)}")
         st.error("Please add HUGGINGFACE_API_KEY and PEXELS_API_KEY to Streamlit secrets!")
         st.stop()
 
 # Initialize configuration
-HF_API_KEY, PEXELS_API_KEY, AMAZON_TAG, TEXT_MODEL_CANDIDATES, IMAGE_MODEL_CANDIDATES = get_config()
+GROQ_API_KEY, HF_API_KEY, REPLICATE_TOKEN, PEXELS_API_KEY, AMAZON_TAG, TEXT_MODEL_CANDIDATES, IMAGE_MODEL_CANDIDATES = get_config()
 
 # Helper functions
 def append_affiliate_tag(url: str) -> str:
@@ -320,6 +329,41 @@ def choose_model(user_choice: Optional[str], candidates: List[str]) -> str:
     if user_choice and user_choice != "auto":
         return user_choice
     return candidates[0]
+
+def call_groq_text(model: str, prompt: str) -> str:
+    """Call Groq API for text generation"""
+    import requests
+    
+    if not GROQ_API_KEY:
+        return call_hf_text(model, prompt)  # Fallback to HF
+    
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # Extract model name for Groq
+    groq_model = model.replace("groq/", "") if "groq/" in model else "llama-3.1-8b-instant"
+    
+    payload = {
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "model": groq_model,
+        "temperature": 0.7,
+        "max_tokens": 1000
+    }
+    
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        if r.status_code != 200:
+            return call_hf_text("gpt2-medium", prompt)  # Fallback
+        
+        data = r.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        return call_hf_text("gpt2-medium", prompt)  # Fallback
 
 def call_hf_text(model: str, prompt: str) -> str:
     url = f"https://api-inference.huggingface.co/models/{model}"
@@ -345,24 +389,12 @@ def call_hf_text(model: str, prompt: str) -> str:
         
         data = r.json()
         
-        # Handle different response formats (including Mistral cleanup)
+        # Handle different response formats (simplified - no Mistral cleanup needed)
         if isinstance(data, list) and data and "generated_text" in data[0]:
-            generated = data[0]["generated_text"]
-            # Clean up Mistral responses
-            if "[/INST]" in generated:
-                parts = generated.split("[/INST]")
-                if len(parts) > 1:
-                    return parts[-1].strip()
-            return generated
+            return data[0]["generated_text"]
         
         if isinstance(data, dict) and "generated_text" in data:
-            generated = data["generated_text"]
-            # Clean up Mistral responses
-            if "[/INST]" in generated:
-                parts = generated.split("[/INST]")
-                if len(parts) > 1:
-                    return parts[-1].strip()
-            return generated
+            return data["generated_text"]
             
         # Handle error responses
         if isinstance(data, dict) and "error" in data:
@@ -475,23 +507,19 @@ with tab1:
 - Insert 1-2 Amazon product mentions naturally (just plain URLs like https://www.amazon.com/dp/B00TTD9BRC). Do NOT write affiliate tags; backend will add them.
 - Be aware of the current date and year for trend awareness but DO NOT stuff the year."""
             
-            # Format prompt for Mistral AI or standard models
-            if model and "mistralai" in model.lower():
-                prompt = f"""<s>[INST] {rules}
-
-Topic: "{blog_topic}"
-Current date (UTC): {today}
-
-Write the body HTML now: [/INST]"""
-            else:
-                prompt = f"""{rules}
+            # Standard format for all models (removed Mistral special formatting)
+            prompt = f"""{rules}
 
 Topic: "{blog_topic}"
 Current date (UTC): {today}
 
 Write the body HTML now:"""
             
-            blog_content = call_hf_text(model, prompt)
+                            # Use Groq for better quality, HF as fallback
+                if "groq/" in model:
+                    blog_content = call_groq_text(model, prompt)
+                else:
+                    blog_content = call_hf_text(model, prompt)
             blog_content_tagged = tag_all_amazon_links(blog_content)
             pexels_image = fetch_pexels_image(blog_topic)
             
@@ -587,19 +615,18 @@ with tab3:
             with st.spinner("Thinking..."):
                 model = choose_model(selected_text_model, TEXT_MODEL_CANDIDATES)
                 
-                # Format prompt based on model type
-                if "mistralai" in model.lower():
-                    beauty_prompt = f"""<s>[INST] You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly, informative, and concise.
-
-Question: {prompt} [/INST]"""
-                else:
-                    beauty_prompt = f"""You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly and informative.
+                # Standard format for all models (removed Mistral special formatting)
+                beauty_prompt = f"""You are a professional beauty expert and skincare specialist. Answer this question with helpful, accurate advice about beauty, skincare, makeup, or wellness. Be friendly and informative.
 
 Question: {prompt}
 
 Answer:"""
                 
-                response = call_hf_text(model, beauty_prompt)
+                # Use Groq for better chat responses
+                if "groq/" in model:
+                    response = call_groq_text(model, beauty_prompt)
+                else:
+                    response = call_hf_text(model, beauty_prompt)
                 st.markdown(response)
                 
                 st.session_state.chat_messages.append({"role": "assistant", "content": response})
