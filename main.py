@@ -98,5 +98,4 @@ AMAZON_PRODUCTS: Dict[str, List[str]] = {
     # niacinamide
     "niacinamide": [
         f"https://www.amazon.com/dp/B09NQ5L9V5?tag={AMAZON_TAG}",  # The Ordinary Niacinamide
-    ],
-    #
+    ],#
