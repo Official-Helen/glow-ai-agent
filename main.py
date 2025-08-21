@@ -13,11 +13,19 @@ from datetime import datetime
 from typing import List, Dict, Tuple, Optional
 import re
 from dataclasses import dataclass
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from google.auth.transport.requests import Request
 import pickle
+
+# Try to import Google API libraries
+try:
+    from googleapiclient.discovery import build
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import Flow
+    from google.auth.transport.requests import Request
+    GOOGLE_APIS_AVAILABLE = True
+except ImportError:
+    print("⚠️  Google API libraries not found. Blogger publishing will be disabled.")
+    print("To enable Blogger publishing, install: pip install google-api-python-client google-auth-oauthlib")
+    GOOGLE_APIS_AVAILABLE = False
 
 # Configuration
 @dataclass
@@ -303,6 +311,10 @@ class BloggerPublisher:
     
     def _authenticate(self):
         """Authenticate with Blogger API"""
+        if not GOOGLE_APIS_AVAILABLE:
+            print("❌ Google API libraries not available. Cannot authenticate with Blogger.")
+            return
+            
         try:
             # OAuth 2.0 setup for Blogger API
             SCOPES = ['https://www.googleapis.com/auth/blogger']
