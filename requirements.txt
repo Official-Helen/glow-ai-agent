@@ -1,18 +1,15 @@
-streamlit>=1.24.0
-requests>=2.31.0
-beautifulsoup4>=4.12.2
-
 # Core dependencies
-requests>=2.28.0
+requests
+beautifulsoup4
+schedule
 
-# Google API dependencies (for Blogger publishing)
-google-api-python-client>=2.0.0
-google-auth-oauthlib>=0.5.0
-google-auth>=2.0.0
+# Google APIs
+google-api-python-client
+google-auth
+google-auth-oauthlib
 
-# Optional: For enhanced trend analysis
-beautifulsoup4>=4.11.0
-lxml>=4.9.0
+# Trends
+pytrends
 
-# For data handling
-python-dateutil>=2.8.0
+# Optional (if using Jupyter for testing)
+ipython
