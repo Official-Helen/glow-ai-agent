@@ -1,21 +1,6 @@
 # Core
-streamlit==1.30.0
-requests==2.32.0
-pyyaml==6.0
-
-# AI/Text generation
-openai==1.7.0
-
-# Trends
-pytrends==4.11.0
-
-# HTML & Markdown handling
-markdown-it-py==2.2.0
-mdurl==0.1.2
-rich==14.1.0
-
-# Image generation
-Pillow==10.1.0
-
+streamlit
+requests
+pyyaml
 # Optional: any other helper packages
-python-dotenv==1.1.1
+python-dotenv
