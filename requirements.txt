@@ -1,3 +1,11 @@
-streamlit==1.29.0
-requests==2.31.0
+streamlit==1.27.0
 pytrends==4.11.0
+requests==2.32.0
+Pillow==10.1.0
+python-dotenv==1.0.1
+beautifulsoup4==4.12.2
+grokai==0.1.2          # For Groq API
+jsonschema==4.21.0
+pandas==2.1.1
+numpy==1.26.2
+pyyaml==7.0.1
