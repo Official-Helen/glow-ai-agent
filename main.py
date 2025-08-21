@@ -1,124 +1,184 @@
 # main.py
-
 import streamlit as st
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 import json
-from typing import List, Dict
-import requests
-from pytrends.request import TrendReq
 
-# --- CONFIGURATION ---
-PIXEL_API_KEY = "AaH9XXg6G9njbOo7Y28TsSSS9ofZ304nZS0q8ZBEWhS5vkNPKyH4Srea"  # Replace with your Pixel API key
+# -------------------------------
+# CONFIGURATION
+# -------------------------------
+PIXEL_API_KEY = "AaH9XXg6G9njbOo7Y28TsSSS9ofZ304nZS0q8ZBEWhS5vkNPKyH4Srea"
+GROQ_API_KEY = "YOUR_GROQ_API_KEY"
+BLOGGER_BLOG_ID = "YOUR_BLOGGER_BLOG_ID"
+BLOGGER_ACCESS_TOKEN = "YOUR_BLOGGER_ACCESS_TOKEN"
 
-# Blogger OAuth credentials
-BLOGGER_CLIENT_ID = "YOUR_CLIENT_ID"
-BLOGGER_CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-BLOGGER_REDIRECT_URI = "https://glowwithhelen.blogspot.com/"  # or your Streamlit URL for OAuth redirect
+st.set_page_config(
+    page_title="Glow AI Blog Generator",
+    page_icon="✨",
+    layout="wide"
+)
 
-# --- INITIALIZE SESSION STATE ---
+# -------------------------------
+# SESSION STATE INITIALIZATION
+# -------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
-if "current_chat" not in st.session_state:
-    st.session_state.current_chat = {"title": "", "seo_desc": "", "content": "", "featured_image": ""}
+if "current_post" not in st.session_state:
+    st.session_state.current_post = {}
 
-# --- UTILITIES ---
-
-def get_trending_topics(category: str = "beauty") -> List[str]:
-    pytrends = TrendReq()
-    trending_searches = pytrends.trending_searches(pn="united_states")
-    trending_list = trending_searches[0].tolist()
-    # Filter by category keywords
-    filtered = [topic for topic in trending_list if category.lower() in topic.lower()]
-    return filtered[:10] if filtered else trending_list[:10]
-
-def generate_pixel_image(prompt: str) -> str:
+# -------------------------------
+# HELPER FUNCTIONS
+# -------------------------------
+def fetch_google_trends(category="beauty"):
     """
-    Generate image URL using Pixel API based on prompt.
-    Returns direct URL for embedding in HTML.
+    Scrape Google Trends for a specific category (beauty, skincare, fashion)
     """
+    try:
+        url = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo=US"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, "xml")
+        items = soup.find_all("item")
+        results = []
+        for item in items:
+            title = item.title.text
+            if category.lower() in title.lower():
+                results.append(title)
+        return list(dict.fromkeys(results))[:5]  # remove duplicates
+    except Exception as e:
+        return [f"Error fetching trends: {e}"]
+
+def fetch_pinterest_trends(category="beauty"):
+    """
+    Scrape Pinterest trends (simplified placeholder)
+    """
+    try:
+        url = f"https://www.pinterest.com/search/pins/?q={category}&rs=typed"
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, "html.parser")
+        pins = soup.find_all("h3")
+        results = [pin.get_text() for pin in pins if pin.get_text()]
+        return list(dict.fromkeys(results))[:5]
+    except Exception as e:
+        return [f"Error fetching Pinterest trends: {e}"]
+
+def generate_image(prompt):
+    """
+    Use Pixel API to generate an image for the blog post
+    """
+    url = "https://api.pixel.com/generate"
+    payload = {
+        "prompt": prompt,
+        "size": "1024x1024",
+        "n": 1
+    }
     headers = {"Authorization": f"Bearer {PIXEL_API_KEY}"}
-    data = {"prompt": prompt, "size": "1024x1024"}
-    response = requests.post("https://api.pixel.com/v1/generate", headers=headers, json=data)
-    if response.status_code == 200:
-        return response.json().get("url")
-    return ""
+    response = requests.post(url, json=payload, headers=headers)
+    data = response.json()
+    return data.get("images", [{}])[0].get("url", "")
 
-def generate_blog_html(title: str, seo_desc: str, topic: str) -> Dict[str, str]:
+def generate_blog_html(topic, seo_title="", seo_description=""):
     """
-    Generate HTML blog post with H2 headings and Pixel image.
+    Use Groq API to generate a full HTML blog post
     """
-    # For simplicity, placeholder content; replace with Groq API call if needed
-    content = f"""
-    <h2>{topic}</h2>
-    <p>This is a detailed blog post about {topic}, optimized for SEO and user engagement. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
-    """
-    # Generate Pixel image
-    image_url = generate_pixel_image(f"{topic} beauty fashion skincare")
+    prompt = f"Write a long, informative, SEO-friendly HTML blog post about '{topic}'. Use H2 for headings and include a featured image placeholder."
+    url = "https://api.groq.com/v1/generate"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {"prompt": prompt, "max_tokens": 1500}
+    response = requests.post(url, json=payload, headers=headers)
+    data = response.json()
+    html_content = data.get("text", "")
+
+    # Generate featured image
+    image_url = generate_image(topic)
     if image_url:
-        content = f'<img src="{image_url}" alt="{topic}" style="width:100%;max-width:800px;">' + content
+        image_html = f'<img src="{image_url}" alt="{topic}" style="max-width:100%;"/>'
+        html_content = image_html + "\n" + html_content
 
-    html_post = f"""
-    <h2>{topic}</h2>
-    <p>{seo_desc}</p>
-    {content}
-    """
-    return {"title": title, "seo_desc": seo_desc, "content": html_post, "featured_image": image_url}
+    return html_content, image_url
 
-def publish_to_blogger(blog_post: Dict[str, str]):
+def publish_to_blogger(title, html_content, seo_description):
     """
-    Publish blog post to Blogger using OAuth credentials.
+    Publish post to Blogger
     """
-    access_token = st.session_state.get("blogger_token")
-    if not access_token:
-        st.warning("Blogger OAuth token missing. Authenticate first.")
-        return
-    url = f"https://www.googleapis.com/blogger/v3/blogs/YOUR_BLOG_ID/posts/"
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    url = f"https://www.googleapis.com/blogger/v3/blogs/{BLOGGER_BLOG_ID}/posts/"
+    headers = {"Authorization": f"Bearer {BLOGGER_ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {
         "kind": "blogger#post",
-        "title": blog_post["title"],
-        "content": blog_post["content"]
+        "title": title,
+        "content": html_content
     }
     response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        st.success("Blog post published successfully!")
-    else:
-        st.error(f"Error publishing post: {response.text}")
+    return response.status_code, response.text
 
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Glow AI Blog Generator", layout="wide")
-
+# -------------------------------
+# UI LAYOUT
+# -------------------------------
 st.title("✨ Glow AI Blog Generator")
 
-# Sidebar - Chat History
-with st.sidebar:
-    st.header("Chat History")
-    if st.session_state.history:
-        for idx, chat in enumerate(st.session_state.history):
-            if st.button(f"{chat['title']}", key=f"hist_{idx}"):
-                st.session_state.current_chat = chat
-    if st.button("Clear History"):
-        st.session_state.history = []
+# Sidebar history panel
+st.sidebar.header("History")
+for i, post in enumerate(reversed(st.session_state.history)):
+    if st.sidebar.button(f"Delete {post['title']}", key=f"del_{i}"):
+        st.session_state.history.pop(len(st.session_state.history) - 1 - i)
+        st.experimental_rerun()
+    st.sidebar.markdown(f"**{post['title']}**")
 
-# Main input
-topic_input = st.text_input("Enter topic (or leave empty for trending topics):")
-category = st.selectbox("Category for trending topics:", ["Beauty", "Skincare", "Fashion"])
+# Main blog generator
+st.subheader("Generate Blog Post")
+mode = st.radio("Mode", ["Auto Trend Blog", "Manual Topic Blog"])
 
-if st.button("Generate Blog Post"):
-    # Determine topic
-    if not topic_input:
-        trending = get_trending_topics(category=category)
-        topic_input = trending[0]  # pick first trending
-    title = f"{topic_input} - Glow With Helen"
-    seo_desc = f"Learn everything about {topic_input} in beauty, skincare, and fashion."
-    blog_post = generate_blog_html(title, seo_desc, topic_input)
-    st.session_state.current_chat = blog_post
-    st.session_state.history.append(blog_post)
+if mode == "Auto Trend Blog":
+    category = st.selectbox("Select Category", ["Beauty", "Skincare", "Fashion"])
+    if st.button("Generate Auto Trend Blog"):
+        google_trends = fetch_google_trends(category)
+        pinterest_trends = fetch_pinterest_trends(category)
+        combined_trends = list(dict.fromkeys(google_trends + pinterest_trends))
+        topic = combined_trends[0] if combined_trends else category
+        html_content, image_url = generate_blog_html(topic)
+        st.session_state.current_post = {
+            "title": topic,
+            "content": html_content,
+            "seo_description": f"Learn about {topic} trends in beauty and fashion.",
+            "image": image_url
+        }
+        st.session_state.history.append(st.session_state.current_post)
+        st.success("Blog generated successfully!")
 
-# Display generated post
-if st.session_state.current_chat.get("content"):
-    st.subheader("Generated Blog Post (HTML Format)")
-    st.code(st.session_state.current_chat["content"], language="html")
+if mode == "Manual Topic Blog":
+    manual_topic = st.text_input("Enter your topic")
+    seo_title = st.text_input("SEO Title")
+    seo_description = st.text_input("SEO Description")
+    if st.button("Generate Manual Blog"):
+        if manual_topic:
+            html_content, image_url = generate_blog_html(manual_topic)
+            st.session_state.current_post = {
+                "title": manual_topic,
+                "content": html_content,
+                "seo_description": seo_description,
+                "image": image_url
+            }
+            st.session_state.history.append(st.session_state.current_post)
+            st.success("Manual blog generated successfully!")
+        else:
+            st.error("Please enter a topic.")
+
+# Display current blog
+if st.session_state.current_post:
+    st.subheader("Preview Blog Post (HTML)")
+    st.markdown(st.session_state.current_post["content"], unsafe_allow_html=True)
+
     if st.button("Publish to Blogger"):
-        publish_to_blogger(st.session_state.current_chat)
+        status_code, response_text = publish_to_blogger(
+            st.session_state.current_post["title"],
+            st.session_state.current_post["content"],
+            st.session_state.current_post["seo_description"]
+        )
+        if status_code == 200:
+            st.success("Blog published to Blogger successfully!")
+        else:
+            st.error(f"Error publishing: {response_text}")
